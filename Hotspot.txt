@@ -1,0 +1,193 @@
+        A Tool of Create HotSpot (Atheros NIC support 80211n/ac)
+
+# Tools
+
+- create_ap
+
+    - feature
+
+        - simple: one line instruction;
+        - low speed: bad support for 5 Ghz and 80211ac. 40Mbps
+
+    - depends
+
+        - hotspot
+
+    - example
+
+        - sudo create_ap --no-virt --ieee80211n --ht_capab `[HT40+]` wlp1s0 wlp2s0 HELLO
+    
+
+- hotspot
+
+    -feature
+
+        - complex: need configuration;
+        - high speed: 80211ac 300Mbps;
+
+    - depends:
+
+        - dnsmasq or other dns,dhcp tools;
+    
+    - configuration example:
+
+        - install: sudo apt install hotspot dnsmasq
+        - hotspot configure: /etc/hotspot.conf      (example in the appendix of this article)
+        - ip configure:   /etc/network/interfaces   (...)
+        - dns 53 port conlict with `systemd-r` and ip gateway:  /etc/dnsmasq.conf   : uncomment `bind-interfaces`
+
+        - automation scipt: hostapd start, NAT sharing, stop,  (...)
+
+
+
+
+
+
+
+Appendix:
+
+
+- hotpsot configuration:
+
+
+interface=wlp2s0      # NIC name
+ctrl_interface=/var/run/hostapd
+ctrl_interface_group=0
+driver=nl80211
+channel=44          # 5G channel
+macaddr_acl=0
+wmm_enabled=1         # QoS support
+#obss_interval=300
+ieee80211n=1    
+require_ht=1
+ht_capab=[HT40+][SHORT-GI-20][SHORT-GI-40][DSSS_CCK-40]
+ieee80211ac=1         # 802.11ac support
+require_vht=1
+#vht_oper_chwidth=0
+#vht_capab=[SHORT-GI-80][SU-BEAMFORMEE]
+
+vht_capab=[MAX-MPDU-3895][SHORT-GI-80][SU-BEAMFORMEE]
+vht_oper_chwidth=1
+vht_oper_centr_freq_seg0_idx=42
+#beacon_int=50
+#dtim_period=20
+basic_rates=60 90 120 180 240 360 480 540
+disassoc_low_ack=0
+ssid=HAHA     #SSID
+#bridge=br0
+hw_mode=a    # 5G mode
+
+
+- ip configure(append `interfaces` file):
+
+allow-hotplug wlp2s0     # wireless interface
+iface wlp2s0 inet static 
+address 192.168.12.1    
+netmask 255.255.255.0
+
+
+- dnsmasq configure:
+
+bind-interfaces
+interface=wlp2s0
+listen-address=192.168.12.1
+dhcp-range=192.168.12.2,192.168.12.100,12h
+dhcp-option=3,192.168.12.1   #gateway
+
+
+- automation scipt:
+
+#!/bin/sh
+
+#Clean things up
+init() { 
+
+#Stop NetworkManager, if already running (it will disturb you) 
+
+/usr/sbin/service network-manager stop
+
+#Stop named, if already running. dnsmasq cannot run because it take up port 53 
+
+killall named 
+
+#Stop dnsmasq, if already running 
+
+/usr/sbin/service dnsmasq stop 
+
+#Stop hostapd, if already running 
+
+/usr/bin/pkill hostapd 
+
+#Bring down wlan0 
+
+/sbin/ip link set down dev wlp2s0
+echo hello
+}
+
+start() { 
+
+#First clean things up 
+
+init 
+
+#Start hostapd, and it will automatically be bringed up 
+
+/usr/sbin/hostapd -B /etc/hostapd.conf 
+
+#Set ip on wlan0 
+
+/sbin/ip addr add 192.168.12.1/24 dev wlp2s0
+
+#Start dnsmasq 
+
+/usr/sbin/service dnsmasq start
+
+#Start ip_forward 
+
+echo 1 > /proc/sys/net/ipv4/ip_forward 
+
+#add iptables rule for NAT 
+
+/sbin/iptables -t nat -A POSTROUTING -o eno1 -j MASQUERADE
+
+}
+
+stop() { 
+
+#Remove iptables rule 
+
+/sbin/iptables -t nat -D POSTROUTING -o eno1 -j MASQUERADE 
+
+#Stop dnsmasq 
+
+/usr/sbin/service dnsmasq stop 
+
+#Stop hostapd 
+
+/usr/bin/pkill hostapd 
+
+#bring down wlan0, and its ip address will automatically be removed 
+
+/sbin/ip link set down dev wlp2s0
+
+}
+
+case "$1" in
+
+'start') 
+
+  start 
+
+  ;;
+
+'stop') 
+
+  stop 
+
+  ;;
+
+*) 
+
+echo "usage $0 start|stop"
+
+esac
